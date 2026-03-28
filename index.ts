@@ -23,6 +23,13 @@ type RouteGuide = {
   steps: string[];
   disclaimer: string;
 };
+type DangerClusterBand = {
+  clusterCount: number;
+  incidentsPerCluster: number;
+  minRadiusRatio: number;
+  maxRadiusRatio: number;
+  clusterSpreadRatio: number;
+};
 type MapState = {
   center: Coordinates;
   zoom: number;
@@ -37,6 +44,13 @@ const START_MARKER_TITLE = "Point A";
 const DESTINATION_MARKER_TITLE = "Point B";
 const DESTINATION_CODE_NAME = "Gateway X";
 const CHECKPOINT_LABEL = "Checkpoint";
+const MIN_DANGER_FIELD_RADIUS_KM = 60;
+const DANGER_CLUSTER_BANDS: DangerClusterBand[] = [
+  { clusterCount: 14, incidentsPerCluster: 10, minRadiusRatio: 0.01, maxRadiusRatio: 0.16, clusterSpreadRatio: 0.015 },
+  { clusterCount: 10, incidentsPerCluster: 8, minRadiusRatio: 0.16, maxRadiusRatio: 0.38, clusterSpreadRatio: 0.025 },
+  { clusterCount: 8, incidentsPerCluster: 6, minRadiusRatio: 0.38, maxRadiusRatio: 0.65, clusterSpreadRatio: 0.04 },
+  { clusterCount: 6, incidentsPerCluster: 6, minRadiusRatio: 0.65, maxRadiusRatio: 1, clusterSpreadRatio: 0.07 },
+];
 
 const EMPTY_ROUTE_GUIDE: RouteGuide = {
   title: "Point A to Point B",
@@ -110,26 +124,25 @@ const DANGER_EVENT_TEMPLATES = [
   },
 ];
 
-const DANGER_EVENT_LAYOUTS: Coordinates[] = [
-  { lat: -1.7, lng: -1.1 },
-  { lat: -1.4, lng: 0.8 },
-  { lat: -1.1, lng: 1.5 },
-  { lat: -0.6, lng: -1.6 },
-  { lat: -0.2, lng: 1.7 },
-  { lat: 0.2, lng: -1.5 },
-  { lat: 0.6, lng: 1.4 },
-  { lat: 1.0, lng: -1.2 },
-  { lat: 1.3, lng: 0.4 },
-  { lat: 1.5, lng: 1.3 },
-  { lat: 1.8, lng: -0.5 },
-  { lat: 0.9, lng: 1.9 },
-];
-
-const DESTINATION_VARIANTS: Coordinates[] = [
+const DEFAULT_DESTINATION_VARIANTS: Coordinates[] = [
   { lat: -1.4, lng: 1.8 },
   { lat: 1.4, lng: 1.7 },
   { lat: -1.5, lng: -1.8 },
   { lat: 1.5, lng: -1.7 },
+];
+
+const TEHRAN_BOUNDS = {
+  minLat: 35.55,
+  maxLat: 35.9,
+  minLng: 51.15,
+  maxLng: 51.65,
+};
+
+const TEHRAN_DESTINATION_VARIANTS: Coordinates[] = [
+  { lat: 1.8, lng: -0.35 },
+  { lat: 1.65, lng: 0.75 },
+  { lat: 1.55, lng: -1.2 },
+  { lat: 1.05, lng: -1.8 },
 ];
 
 const serverConfig: ServerConfig = {
@@ -275,11 +288,17 @@ function buildPositionMarker(center: Coordinates): Marker {
 
 function buildSafeDestination(center: Coordinates, zoom: number): Coordinates {
   const spread = getBookmarkSpread(zoom);
-  const variant = DESTINATION_VARIANTS[randomIndex(DESTINATION_VARIANTS.length)];
+  const destinationVariants = isWithinTehran(center)
+    ? TEHRAN_DESTINATION_VARIANTS
+    : DEFAULT_DESTINATION_VARIANTS;
+  const variant = destinationVariants[randomIndex(destinationVariants.length)];
+  const jitterScale = isWithinTehran(center) ? 0.08 : 0.15;
 
   return {
-    lat: clampLatitude(center.lat + variant.lat * spread.lat + randomOffset(spread.lat * 0.15)),
-    lng: normalizeLongitude(center.lng + variant.lng * spread.lng + randomOffset(spread.lng * 0.15)),
+    lat: clampLatitude(center.lat + variant.lat * spread.lat + randomOffset(spread.lat * jitterScale)),
+    lng: normalizeLongitude(
+      center.lng + variant.lng * spread.lng + randomOffset(spread.lng * jitterScale)
+    ),
   };
 }
 
@@ -321,23 +340,34 @@ function buildSuggestedPathMarkers(center: Coordinates, destination: Coordinates
 }
 
 function buildDangerEventMarkers(center: Coordinates, zoom: number): Marker[] {
-  const spread = getDangerSpread(zoom);
+  const fieldRadiusKm = getDangerFieldRadiusKm(zoom);
+  const markers: Marker[] = [];
+  let markerIndex = 0;
 
-  return DANGER_EVENT_TEMPLATES.map((template, index) => {
-    const layout = DANGER_EVENT_LAYOUTS[index];
-    const jitter = {
-      lat: randomOffset(spread.lat * 0.12),
-      lng: randomOffset(spread.lng * 0.12),
-    };
+  // Keep the map busiest near Point A, then fan the clusters out toward the field edge.
+  for (const band of DANGER_CLUSTER_BANDS) {
+    const bandRotation = Math.random() * Math.PI * 2;
 
-    return {
-      lat: clampLatitude(center.lat + layout.lat * spread.lat + jitter.lat),
-      lng: normalizeLongitude(center.lng + layout.lng * spread.lng + jitter.lng),
-      title: `${template.label} ${index + 1}`,
-      description: template.detail,
-      color: template.color,
-    };
-  });
+    for (let clusterIndex = 0; clusterIndex < band.clusterCount; clusterIndex += 1) {
+      const clusterCenter = buildDangerClusterCenter(
+        center,
+        fieldRadiusKm,
+        band,
+        clusterIndex,
+        bandRotation
+      );
+
+      for (let incidentIndex = 0; incidentIndex < band.incidentsPerCluster; incidentIndex += 1) {
+        const template = DANGER_EVENT_TEMPLATES[markerIndex % DANGER_EVENT_TEMPLATES.length];
+        const coordinates = buildClusterIncidentLocation(clusterCenter, fieldRadiusKm, band);
+
+        markers.push(buildDangerEventMarker(center, coordinates, template, markerIndex));
+        markerIndex += 1;
+      }
+    }
+  }
+
+  return markers;
 }
 
 function getBookmarkSpread(zoom: number): Coordinates {
@@ -356,13 +386,134 @@ function getBookmarkSpread(zoom: number): Coordinates {
   return { lat: 0.35, lng: 0.5 };
 }
 
-function getDangerSpread(zoom: number): Coordinates {
-  const spread = getBookmarkSpread(zoom);
+function getDangerFieldRadiusKm(zoom: number): number {
+  if (zoom <= 7) {
+    return 90;
+  }
 
+  if (zoom <= 9) {
+    return 80;
+  }
+
+  if (zoom <= 11) {
+    return 70;
+  }
+
+  return MIN_DANGER_FIELD_RADIUS_KM;
+}
+
+function buildDangerClusterCenter(
+  center: Coordinates,
+  fieldRadiusKm: number,
+  band: DangerClusterBand,
+  clusterIndex: number,
+  bandRotation: number
+): Coordinates {
+  const clusterAngle = getClusterAngleRadians(clusterIndex, band.clusterCount, bandRotation);
+  const clusterRadiusKm = randomDistanceBetween(
+    fieldRadiusKm * band.minRadiusRatio,
+    fieldRadiusKm * band.maxRadiusRatio
+  );
+
+  return offsetCoordinatesByKilometers(
+    center,
+    Math.sin(clusterAngle) * clusterRadiusKm,
+    Math.cos(clusterAngle) * clusterRadiusKm
+  );
+}
+
+function getClusterAngleRadians(
+  clusterIndex: number,
+  clusterCount: number,
+  bandRotation: number
+): number {
+  const baseAngle = (Math.PI * 2 * clusterIndex) / clusterCount;
+  const jitter = randomSignedDistance(Math.PI / clusterCount / 2);
+
+  return baseAngle + bandRotation + jitter;
+}
+
+function buildClusterIncidentLocation(
+  clusterCenter: Coordinates,
+  fieldRadiusKm: number,
+  band: DangerClusterBand
+): Coordinates {
+  const clusterSpreadKm = fieldRadiusKm * band.clusterSpreadRatio;
+
+  return offsetCoordinatesByKilometers(
+    clusterCenter,
+    randomSignedDistance(clusterSpreadKm),
+    randomSignedDistance(clusterSpreadKm)
+  );
+}
+
+function buildDangerEventMarker(
+  center: Coordinates,
+  coordinates: Coordinates,
+  template: (typeof DANGER_EVENT_TEMPLATES)[number],
+  markerIndex: number
+): Marker {
   return {
-    lat: spread.lat * 1.1,
-    lng: spread.lng * 1.1,
+    lat: coordinates.lat,
+    lng: coordinates.lng,
+    title: `${template.label} ${markerIndex + 1}`,
+    description: buildDangerDescription(template.detail, center, coordinates),
+    color: template.color,
   };
+}
+
+function buildDangerDescription(
+  detail: string,
+  center: Coordinates,
+  coordinates: Coordinates
+): string {
+  return `${detail} Reported ${getRelativeIncidentLocationLabel(center, coordinates)}.`;
+}
+
+function getRelativeIncidentLocationLabel(
+  center: Coordinates,
+  coordinates: Coordinates
+): string {
+  const direction = getDirectionLabel(center, coordinates);
+  const distanceKm = getDistanceInKilometers(center, coordinates).toFixed(1);
+
+  if (direction === "forward") {
+    return `${distanceKm} km from ${START_MARKER_TITLE}`;
+  }
+
+  return `${distanceKm} km ${direction} of ${START_MARKER_TITLE}`;
+}
+
+function offsetCoordinatesByKilometers(
+  center: Coordinates,
+  latOffsetKm: number,
+  lngOffsetKm: number
+): Coordinates {
+  return {
+    lat: clampLatitude(center.lat + kilometersToLatitudeDegrees(latOffsetKm)),
+    lng: normalizeLongitude(center.lng + kilometersToLongitudeDegrees(lngOffsetKm, center.lat)),
+  };
+}
+
+function kilometersToLatitudeDegrees(distanceKm: number): number {
+  return distanceKm / 110.574;
+}
+
+function kilometersToLongitudeDegrees(distanceKm: number, latitude: number): number {
+  const latitudeInRadians = (latitude * Math.PI) / 180;
+  const kilometersPerDegree = 111.32 * Math.cos(latitudeInRadians);
+  const safeKilometersPerDegree = Math.max(1, Math.abs(kilometersPerDegree));
+
+  return distanceKm / safeKilometersPerDegree;
+}
+
+function getDistanceInKilometers(from: Coordinates, to: Coordinates): number {
+  const averageLatitude = (from.lat + to.lat) / 2;
+  const averageLatitudeInRadians = (averageLatitude * Math.PI) / 180;
+  const latDistanceKm = (to.lat - from.lat) * 110.574;
+  const lngDistanceKm = (to.lng - from.lng) * 111.32 * Math.cos(averageLatitudeInRadians);
+
+  return Math.sqrt(latDistanceKm ** 2 + lngDistanceKm ** 2);
 }
 
 function randomOffset(maxDistance: number): number {
@@ -371,6 +522,22 @@ function randomOffset(maxDistance: number): number {
   const direction = Math.random() >= 0.5 ? 1 : -1;
 
   return roundCoordinate(distance * direction);
+}
+
+function randomDistanceBetween(minDistance: number, maxDistance: number): number {
+  if (maxDistance <= minDistance) {
+    return roundCoordinate(minDistance);
+  }
+
+  return roundCoordinate(minDistance + Math.random() * (maxDistance - minDistance));
+}
+
+function randomSignedDistance(maxDistance: number): number {
+  if (maxDistance <= 0) {
+    return 0;
+  }
+
+  return roundCoordinate((Math.random() * 2 - 1) * maxDistance);
 }
 
 function randomIndex(length: number): number {
@@ -395,6 +562,21 @@ function normalizeLongitude(value: number): number {
 
 function roundCoordinate(value: number): number {
   return Number(value.toFixed(6));
+}
+
+/**
+ * Treat central and greater Tehran as one operating area for the simulated relocation copy.
+ */
+function isWithinTehran(center: Coordinates): boolean {
+  if (center.lat < TEHRAN_BOUNDS.minLat || center.lat > TEHRAN_BOUNDS.maxLat) {
+    return false;
+  }
+
+  if (center.lng < TEHRAN_BOUNDS.minLng || center.lng > TEHRAN_BOUNDS.maxLng) {
+    return false;
+  }
+
+  return true;
 }
 
 function buildMapState(center: Coordinates, zoom: number, title: string): MapState {
@@ -423,6 +605,10 @@ function buildRouteGuide(
   dangerMarkers: Marker[],
   zoom: number
 ): RouteGuide {
+  if (isWithinTehran(center)) {
+    return buildTehranRouteGuide(center, destination, routeMarkers, dangerMarkers, zoom);
+  }
+
   const routeDirection = getDirectionLabel(center, destination);
   const corridorName = getCorridorName(routeDirection);
   const incidentCluster = getIncidentClusterLabel(center, dangerMarkers);
@@ -447,6 +633,46 @@ function buildRouteGuide(
     ],
     disclaimer:
       "Simulated route only. Corridor names, checkpoints, and incident clusters are fictional and must not guide real-world movement decisions.",
+  };
+}
+
+/**
+ * Keep the existing guide format, but phrase it as a practical Tehran relocation case.
+ */
+function buildTehranRouteGuide(
+  center: Coordinates,
+  destination: Coordinates,
+  routeMarkers: Marker[],
+  dangerMarkers: Marker[],
+  zoom: number
+): RouteGuide {
+  const routeDirection = getDirectionLabel(center, destination);
+  const startZone = getTehranStartZone(center);
+  const corridorName = getTehranCorridorName(routeDirection);
+  const stagingZone = getTehranStagingZone(routeDirection);
+  const destinationZone = getTehranDestinationZone(routeDirection);
+  const incidentCluster = getIncidentClusterLabel(center, dangerMarkers);
+  const firstCheckpoint = routeMarkers[0]?.title ?? `${CHECKPOINT_LABEL} 1`;
+  const middleCheckpoint =
+    routeMarkers[Math.floor(routeMarkers.length / 2)]?.title ?? `${CHECKPOINT_LABEL} 4`;
+  const finalCheckpoint =
+    routeMarkers[routeMarkers.length - 1]?.title ?? `${CHECKPOINT_LABEL} ${ROUTE_POINT_COUNT}`;
+  const finalApproach = getFinalApproachLabel(routeMarkers[routeMarkers.length - 1], destination);
+  const eta = getSimulatedEtaLabel(zoom);
+
+  return {
+    title: "Point A to Point B",
+    summary:
+      `Use this as a Tehran move case: leave ${startZone}, follow the ${corridorName}, ` +
+      `and finish at ${DESTINATION_MARKER_TITLE} (${DESTINATION_CODE_NAME}) as a stand-in for ${destinationZone}.`,
+    eta,
+    steps: [
+      `Leave ${START_MARKER_TITLE} from ${startZone} and use ${firstCheckpoint} to break into ${stagingZone}. In Tehran, the first move is to get out of the tighter inner-city belt before making a longer shift.`,
+      `Use ${middleCheckpoint} to stay on line toward ${destinationZone}. Keep the ${incidentCluster} outside your direct path while you move into the more workable north or west-side receiving areas.`,
+      `After ${finalCheckpoint}, take the ${finalApproach} final approach into ${DESTINATION_MARKER_TITLE} at ${DESTINATION_CODE_NAME}. Treat that handoff as entry into ${destinationZone} and stay close to larger parks, foothill edges, or lower-density streets once you arrive.`,
+    ],
+    disclaimer:
+      "Simulated route only. Tehran zones and movement logic are illustrative and must not guide real-world movement decisions.",
   };
 }
 
@@ -485,6 +711,77 @@ function getCorridorName(direction: string): string {
   };
 
   return corridorNames[direction] ?? "central corridor";
+}
+
+/**
+ * Label the origin in the way a Tehran user would actually think about the city.
+ */
+function getTehranStartZone(center: Coordinates): string {
+  if (center.lat <= 35.66) {
+    return "south Tehran";
+  }
+
+  if (center.lat >= 35.78) {
+    return "north Tehran";
+  }
+
+  if (center.lng <= 51.3) {
+    return "west Tehran";
+  }
+
+  if (center.lng >= 51.48) {
+    return "east Tehran";
+  }
+
+  return "central Tehran";
+}
+
+function getTehranCorridorName(direction: string): string {
+  const corridorNames: Record<string, string> = {
+    north: "north-central spine",
+    "north-east": "north-east foothill belt",
+    east: "east-to-north-east lift",
+    "south-east": "north-east recovery arc",
+    south: "northbound recovery spine",
+    "south-west": "west-side recovery arc",
+    west: "west open-space corridor",
+    "north-west": "north-west hillside belt",
+    forward: "inner-to-outer relief corridor",
+  };
+
+  return corridorNames[direction] ?? "inner-to-outer relief corridor";
+}
+
+function getTehranStagingZone(direction: string): string {
+  const stagingZones: Record<string, string> = {
+    north: "the Fatemi to Vanak transition belt",
+    "north-east": "the Abbas Abad to Qeytarieh transition belt",
+    east: "the Lavizan edge and north-east transition belt",
+    "south-east": "the east-side lift toward the foothill belt",
+    south: "the northbound transition belt above the dense core",
+    "south-west": "the west-side transition belt toward Pardisan",
+    west: "the Pardisan to Chitgar transition belt",
+    "north-west": "the Vanak to Saadat Abad transition belt",
+    forward: "the relief belt above the central core",
+  };
+
+  return stagingZones[direction] ?? "the relief belt above the central core";
+}
+
+function getTehranDestinationZone(direction: string): string {
+  const destinationZones: Record<string, string> = {
+    north: "Vanak, Mirdamad, and northern Abbas Abad",
+    "north-east": "Qeytarieh, Farmanieh, and Niavaran",
+    east: "Lavizan and the north-east edge districts",
+    "south-east": "Lavizan and the north-east edge districts",
+    south: "Vanak, Mirdamad, and northern Abbas Abad",
+    "south-west": "Pardisan, Olympic Village, and Chitgar",
+    west: "Pardisan, Olympic Village, and Chitgar",
+    "north-west": "Saadat Abad, Evin, and Velenjak",
+    forward: "Vanak, Saadat Abad, and the northern relief belt",
+  };
+
+  return destinationZones[direction] ?? "Vanak, Saadat Abad, and the northern relief belt";
 }
 
 function getIncidentClusterLabel(center: Coordinates, dangerMarkers: Marker[]): string {
