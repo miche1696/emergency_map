@@ -55,6 +55,8 @@ Or open the [Inspector](https://inspector.manufact.com/inspector?autoConnect=htt
 | `get-place-details` | Look up place details by name |
 | `add-markers` | Add more markers to an existing map |
 
+`map-view` is the widget rendered by `show-map` and `add-markers`. It is not a standalone MCP tool.
+
 ### Demo prompt idea
 
 Ask the model something like:

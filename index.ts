@@ -1,9 +1,10 @@
-import { MCPServer, object, text, widget } from "mcp-use/server";
+import { MCPServer, object, text, widget, type ServerConfig } from "mcp-use/server";
 import { z } from "zod";
+// Production runs the built server with Node ESM, so relative imports need a `.js` suffix.
 import {
   buildMockEmergencyBriefing,
   coordinatesSchema,
-} from "./src/emergency-briefing";
+} from "./src/emergency-briefing.js";
 
 const markerSchema = z.object({
   lat: z.number().describe("Latitude"),
@@ -131,17 +132,28 @@ const DESTINATION_VARIANTS: Coordinates[] = [
   { lat: 1.5, lng: -1.7 },
 ];
 
-const server = new MCPServer({
+const serverConfig: ServerConfig = {
   name: "maps-explorer",
   title: "Maps Explorer",
   version: "1.0.0",
   description: "Interactive maps — Leaflet in your chat",
-  baseUrl: process.env.MCP_URL || "http://localhost:3000",
+  // Use stateless HTTP so clients can call `/mcp` directly without a prior
+  // session bootstrap. This avoids "Server not initialized" errors.
+  stateless: true,
   favicon: "favicon.ico",
   icons: [
     { src: "icon.svg", mimeType: "image/svg+xml", sizes: ["512x512"] },
   ],
-});
+};
+
+// Only pin a public base URL when one is explicitly provided.
+// Otherwise let mcp-use derive the runtime origin instead of hardcoding localhost
+// into widget HTML and asset URLs.
+if (process.env.MCP_URL) {
+  serverConfig.baseUrl = process.env.MCP_URL;
+}
+
+const server = new MCPServer(serverConfig);
 
 let lastMapState: MapState = {
   center: { lat: 0, lng: 0 },
