@@ -16,7 +16,7 @@ export const propSchema = z.object({
   center: z
     .object({ lat: z.number(), lng: z.number() })
     .describe("Map center"),
-  zoom: z.number().default(5).describe("Zoom level 1-18"),
+  zoom: z.number().default(12).describe("Zoom level 1-18"),
   markers: z.array(markerSchema).describe("Map markers"),
 });
 

@@ -10,7 +10,7 @@ import "../styles.css";
 import { propSchema, type MapViewProps, type Marker } from "./types";
 
 export const widgetMetadata: WidgetMetadata = {
-  description: "Interactive Leaflet map with markers, popups, and place details",
+  description: "Interactive Leaflet event map with bookmarks, popups, and place details",
   props: propSchema,
   exposeAsTool: false,
   metadata: {

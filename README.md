@@ -8,7 +8,7 @@
   </a>
 </p>
 
-Interactive map MCP App powered by [Leaflet](https://leafletjs.com/). The model places markers, adjusts zoom, and renders live maps inside the conversation with colored pins and popup descriptions.
+Interactive event map MCP App powered by [Leaflet](https://leafletjs.com/). The model centers the map, drops a "your position" marker, and auto-generates recent-event bookmarks around it on every `show-map` call.
 
 ![Maps Explorer Demo](./repo-assets/demo.gif)
 
@@ -36,7 +36,9 @@ Or open the [Inspector](https://inspector.manufact.com/inspector?autoConnect=htt
 
 ## Features
 
-- **Streaming markers** — pins appear on the map as the model adds them
+- **Auto-generated event bookmarks** — every `show-map` call creates fresh recent-event pins
+- **Current position marker** — the requested center is always shown as your position
+- **Streaming markers** — pins still appear on the map as the model adds them
 - **Colored pins** — red, blue, green, orange, purple markers
 - **Popup descriptions** — click markers for details
 - **Zoom & pan** — fully interactive Leaflet map
@@ -46,7 +48,7 @@ Or open the [Inspector](https://inspector.manufact.com/inspector?autoConnect=htt
 
 | Tool | Description |
 |------|-------------|
-| `show-map` | Display a map centered on a location with markers |
+| `show-map` | Display an event bookmark map centered on a location |
 | `get-place-details` | Look up place details by name |
 | `add-markers` | Add more markers to an existing map |
 

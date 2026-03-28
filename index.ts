@@ -9,6 +9,45 @@ const markerSchema = z.object({
   color: z.enum(["red", "blue", "green", "orange", "purple"]).optional().describe("Marker color"),
 });
 
+type Coordinates = { lat: number; lng: number };
+type Marker = z.infer<typeof markerSchema>;
+type MapState = {
+  center: Coordinates;
+  zoom: number;
+  markers: Marker[];
+  title: string;
+};
+
+const DEFAULT_MAP_TITLE = "Recent events near you";
+
+const RECENT_EVENT_TEMPLATES: Array<Omit<Marker, "lat" | "lng">> = [
+  {
+    title: "Indirect fire reported",
+    description: "Recent incident bookmark. Rocket or artillery activity reported in this sector.",
+    color: "red",
+  },
+  {
+    title: "Civilian evacuation corridor",
+    description: "Recent incident bookmark. Organized movement of non-combatants along this route.",
+    color: "orange",
+  },
+  {
+    title: "Checkpoint / access control",
+    description: "Recent incident bookmark. Armed checkpoint or movement restriction observed here.",
+    color: "blue",
+  },
+  {
+    title: "Field medical / triage",
+    description: "Recent incident bookmark. Ad-hoc casualty collection or stabilization point.",
+    color: "green",
+  },
+  {
+    title: "Critical infrastructure damage",
+    description: "Recent incident bookmark. Power, water, transport, or communications impact reported.",
+    color: "purple",
+  },
+];
+
 const server = new MCPServer({
   name: "maps-explorer",
   title: "Maps Explorer",
@@ -21,14 +60,11 @@ const server = new MCPServer({
   ],
 });
 
-let lastMapState: {
-  center: { lat: number; lng: number };
-  zoom: number;
-  markers: z.infer<typeof markerSchema>[];
-} = {
+let lastMapState: MapState = {
   center: { lat: 0, lng: 0 },
   zoom: 5,
   markers: [],
+  title: DEFAULT_MAP_TITLE,
 };
 
 const placeDatabase: Record<
@@ -131,12 +167,107 @@ const placeDatabase: Record<
   },
 };
 
+function buildPositionMarker(center: Coordinates): Marker {
+  return {
+    lat: center.lat,
+    lng: center.lng,
+    title: "Your position",
+    description: "The current focus of the map.",
+    color: "blue",
+  };
+}
+
+function buildRecentEventBookmarks(center: Coordinates, zoom: number): Marker[] {
+  const spread = getBookmarkSpread(zoom);
+
+  return RECENT_EVENT_TEMPLATES.map((template) => ({
+    ...template,
+    lat: clampLatitude(center.lat + randomOffset(spread.lat)),
+    lng: normalizeLongitude(center.lng + randomOffset(spread.lng)),
+  }));
+}
+
+function getBookmarkSpread(zoom: number): Coordinates {
+  if (zoom >= 14) {
+    return { lat: 0.01, lng: 0.015 };
+  }
+
+  if (zoom >= 11) {
+    return { lat: 0.04, lng: 0.06 };
+  }
+
+  if (zoom >= 8) {
+    return { lat: 0.12, lng: 0.18 };
+  }
+
+  return { lat: 0.35, lng: 0.5 };
+}
+
+function randomOffset(maxDistance: number): number {
+  const minDistance = maxDistance * 0.25;
+  const distance = minDistance + Math.random() * (maxDistance - minDistance);
+  const direction = Math.random() >= 0.5 ? 1 : -1;
+
+  return roundCoordinate(distance * direction);
+}
+
+function clampLatitude(value: number): number {
+  return roundCoordinate(Math.max(-85, Math.min(85, value)));
+}
+
+function normalizeLongitude(value: number): number {
+  if (value > 180) {
+    return roundCoordinate(value - 360);
+  }
+
+  if (value < -180) {
+    return roundCoordinate(value + 360);
+  }
+
+  return roundCoordinate(value);
+}
+
+function roundCoordinate(value: number): number {
+  return Number(value.toFixed(6));
+}
+
+function buildBookmarksMap(center: Coordinates, zoom: number): Marker[] {
+  const positionMarker = buildPositionMarker(center);
+  const recentEventBookmarks = buildRecentEventBookmarks(center, zoom);
+
+  return [positionMarker, ...recentEventBookmarks];
+}
+
+function findMarkerByName(name: string): Marker | undefined {
+  const normalizedName = name.toLowerCase().trim();
+
+  return lastMapState.markers.find(
+    (marker) => marker.title.toLowerCase().trim() === normalizedName
+  );
+}
+
+function buildGeneratedMarkerDetails(marker: Marker) {
+  const isPositionMarker = marker.title === "Your position";
+
+  return {
+    name: marker.title,
+    population: isPositionMarker ? "Not applicable" : "Live bookmark",
+    timezone: "Follows the timezone of the current map area",
+    country: isPositionMarker ? "Current position" : "Recent event",
+    funFacts: [
+      marker.description ?? "Pinned on the current map.",
+      "This point was generated automatically when show-map was called.",
+    ],
+    coordinates: { lat: marker.lat, lng: marker.lng },
+  };
+}
+
 server.tool(
   {
     name: "show-map",
     description:
-      "Show an interactive map with markers. Supports colored markers with titles and descriptions. " +
-      "Use this to display locations, routes, points of interest, or any geographic data.",
+      "Show an event bookmark map centered on a location. " +
+      "Each call adds your position and a fresh set of recent-event bookmarks automatically.",
     schema: z.object({
       center: z
         .object({ lat: z.number(), lng: z.number() })
@@ -145,11 +276,8 @@ server.tool(
         .number()
         .min(1)
         .max(18)
-        .default(5)
+        .default(12)
         .describe("Zoom level (1=world, 18=building)"),
-      markers: z
-        .array(markerSchema)
-        .describe("Array of map markers to display"),
       title: z.string().optional().describe("Optional map title"),
     }),
     widget: {
@@ -158,15 +286,18 @@ server.tool(
       invoked: "Map ready",
     },
   },
-  async ({ center, zoom, markers, title }) => {
-    lastMapState = { center, zoom, markers };
+  async ({ center, zoom, title }) => {
+    const resolvedTitle = title ?? DEFAULT_MAP_TITLE;
+    const markers = buildBookmarksMap(center, zoom);
+
+    lastMapState = { center, zoom, markers, title: resolvedTitle };
 
     return widget({
-      props: { center, zoom, markers, title },
+      props: { center, zoom, markers, title: resolvedTitle },
       output: text(
         `Map centered at ${center.lat.toFixed(4)}, ${center.lng.toFixed(4)} ` +
-          `(zoom ${zoom}) with ${markers.length} marker${markers.length !== 1 ? "s" : ""}` +
-          (title ? `: ${title}` : "")
+          `(zoom ${zoom}) with 1 position marker and ${markers.length - 1} recent-event bookmark${markers.length - 1 !== 1 ? "s" : ""}` +
+          `: ${resolvedTitle}`
       ),
     });
   }
@@ -204,6 +335,12 @@ server.tool(
       });
     }
 
+    const marker = findMarkerByName(name);
+
+    if (marker) {
+      return object(buildGeneratedMarkerDetails(marker));
+    }
+
     return object({
       name,
       population: "Unknown",
@@ -237,6 +374,7 @@ server.tool(
         center: lastMapState.center,
         zoom: lastMapState.zoom,
         markers: lastMapState.markers,
+        title: lastMapState.title,
       },
       output: text(
         `Added ${newMarkers.length} marker${newMarkers.length !== 1 ? "s" : ""}. ` +
