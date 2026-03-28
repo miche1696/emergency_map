@@ -13,3 +13,22 @@ body {
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif;
 }
+
+.map-shell {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  overscroll-behavior: contain;
+}
+
+.map-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.map-shell .leaflet-container {
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  overscroll-behavior: contain;
+}

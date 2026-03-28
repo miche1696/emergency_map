@@ -6,12 +6,13 @@ import {
   type EmergencyBriefingProps,
   type EmergencyNewsSeverity,
   type EmergencyRiskLevel,
+  type Household,
   type PackPriority,
 } from "./types";
 
 export const widgetMetadata: WidgetMetadata = {
   description:
-    "Text-first emergency move-prep widget with simulated local conditions, packing advice, and departure guidance",
+    "Text-first emergency move-prep widget with family-aware packing advice, departure guidance, and area conditions",
   props: propSchema,
   exposeAsTool: false,
   metadata: {
@@ -45,6 +46,28 @@ type SectionCardProps = {
   eyebrow?: string;
   children: React.ReactNode;
 };
+
+function describeTravelParty(household?: Household): string | null {
+  if (!household) {
+    return null;
+  }
+
+  const parts: string[] = [];
+
+  if (household.adults.length) {
+    parts.push(`Adults: ${household.adults.join(", ")}`);
+  }
+
+  if (household.children.length) {
+    parts.push(`Children: ${household.children.join(", ")}`);
+  }
+
+  if (!parts.length) {
+    return null;
+  }
+
+  return parts.join(" • ");
+}
 
 function SectionCard({ title, eyebrow, children }: SectionCardProps) {
   return (
@@ -95,6 +118,8 @@ const EmergencyBriefing: React.FC = () => {
     return <LoadingState />;
   }
 
+  const travelPartyLabel = describeTravelParty(props.household);
+
   const surfaceStyle = isDark
     ? {
         background:
@@ -116,7 +141,7 @@ const EmergencyBriefing: React.FC = () => {
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0">
                 <p className="text-[11px] font-medium uppercase tracking-[0.26em] text-stone-500 dark:text-stone-400">
-                  Simulated move-prep briefing
+                  Family move-prep briefing
                 </p>
                 <h1
                   className="mt-2 text-3xl leading-tight text-slate-950 dark:text-stone-50"
@@ -133,6 +158,11 @@ const EmergencyBriefing: React.FC = () => {
                 {props.destinationLabel ? (
                   <p className="mt-3 text-sm font-medium text-slate-900 dark:text-stone-100">
                     Planned destination: {props.destinationLabel}
+                  </p>
+                ) : null}
+                {travelPartyLabel ? (
+                  <p className="mt-2 text-sm text-slate-700 dark:text-stone-300">
+                    {travelPartyLabel}
                   </p>
                 ) : null}
               </div>
@@ -156,8 +186,8 @@ const EmergencyBriefing: React.FC = () => {
               <div className="rounded-full border border-stone-300/80 bg-white/75 px-3 py-1 text-xs text-slate-700 dark:border-stone-600 dark:bg-slate-900/70 dark:text-stone-200">
                 {props.weather.condition} • {props.weather.temperatureC}C
               </div>
-              <div className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200">
-                {props.disclaimer}
+              <div className="rounded-full border border-stone-300/80 bg-white/75 px-3 py-1 text-xs text-slate-700 dark:border-stone-600 dark:bg-slate-900/70 dark:text-stone-200">
+                {props.planningNote}
               </div>
             </div>
           </div>
@@ -168,7 +198,7 @@ const EmergencyBriefing: React.FC = () => {
 
           <div className="grid gap-4 p-4 md:grid-cols-[1.25fr_0.95fr] md:p-5">
             <div className="space-y-4">
-              <SectionCard title="Latest News" eyebrow="Mock updates">
+              <SectionCard title="Area Conditions" eyebrow="Latest reports">
                 <div className="space-y-3">
                   {props.latestNews.map((item) => (
                     <article
@@ -213,7 +243,7 @@ const EmergencyBriefing: React.FC = () => {
                 </ul>
               </SectionCard>
 
-              <SectionCard title="Survival Notes" eyebrow="Keep it simple">
+              <SectionCard title="Practical Notes" eyebrow="Keep it simple">
                 <ul className="space-y-2">
                   {props.survivalNotes.map((item) => (
                     <li
@@ -225,6 +255,21 @@ const EmergencyBriefing: React.FC = () => {
                   ))}
                 </ul>
               </SectionCard>
+
+              {props.familyConsiderations.length ? (
+                <SectionCard title="Family Notes" eyebrow="For this household">
+                  <ul className="space-y-2">
+                    {props.familyConsiderations.map((item) => (
+                      <li
+                        key={item}
+                        className="rounded-[18px] border border-stone-200 bg-stone-50 px-3 py-3 text-sm leading-6 text-slate-800 dark:border-stone-700 dark:bg-slate-950/50 dark:text-stone-200"
+                      >
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </SectionCard>
+              ) : null}
             </div>
 
             <div className="space-y-4">
@@ -291,6 +336,21 @@ const EmergencyBriefing: React.FC = () => {
                   ))}
                 </div>
               </SectionCard>
+
+              {props.packAssignments.length ? (
+                <SectionCard title="Carry Roles" eyebrow="Who carries what">
+                  <div className="space-y-2">
+                    {props.packAssignments.map((item) => (
+                      <div
+                        key={item}
+                        className="rounded-[18px] border border-stone-200 bg-stone-50 px-3 py-3 text-sm leading-6 text-slate-800 dark:border-stone-700 dark:bg-slate-950/50 dark:text-stone-200"
+                      >
+                        {item}
+                      </div>
+                    ))}
+                  </div>
+                </SectionCard>
+              ) : null}
 
               <SectionCard title="Comms And Nearby Options" eyebrow="Support points">
                 <div className="space-y-4">

@@ -4,5 +4,6 @@ export {
   type EmergencyBriefingProps,
   type EmergencyNewsSeverity,
   type EmergencyRiskLevel,
+  type Household,
   type PackPriority,
 } from "../../src/emergency-briefing";

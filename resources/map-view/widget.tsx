@@ -6,6 +6,7 @@ import {
   type WidgetMetadata,
 } from "mcp-use/react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import "leaflet/dist/leaflet.css";
 import "../styles.css";
 import { propSchema, type MapViewProps, type Marker, type RouteGuide } from "./types";
 
@@ -56,6 +57,41 @@ const FALLBACK_ROUTE_GUIDE: RouteGuide = {
     "Simulated route only. Mock map data must not guide real-world movement decisions.",
 };
 
+function buildViewKey(center: MapViewProps["center"], zoom: number): string {
+  return `${center.lat}:${center.lng}:${zoom}`;
+}
+
+function stopHostGestureCapture(element: HTMLElement): () => void {
+  const stopPropagation = (event: Event) => {
+    event.stopPropagation();
+  };
+  const listenerOptions = { capture: true };
+
+  const eventNames = [
+    "wheel",
+    "dblclick",
+    "mousedown",
+    "mousemove",
+    "mouseup",
+    "pointerdown",
+    "pointermove",
+    "pointerup",
+    "touchstart",
+    "touchmove",
+    "touchend",
+  ] as const;
+
+  for (const eventName of eventNames) {
+    element.addEventListener(eventName, stopPropagation, listenerOptions);
+  }
+
+  return () => {
+    for (const eventName of eventNames) {
+      element.removeEventListener(eventName, stopPropagation, listenerOptions);
+    }
+  };
+}
+
 const MapView: React.FC = () => {
   const {
     props,
@@ -76,6 +112,7 @@ const MapView: React.FC = () => {
   const markersLayerRef = useRef<any>(null);
   const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const leafletLoading = useRef(false);
+  const appliedViewRef = useRef<string>("");
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [selectedMarker, setSelectedMarker] = useState<Marker | null>(null);
   const [viewBounds, setViewBounds] = useState<string>("");
@@ -85,13 +122,12 @@ const MapView: React.FC = () => {
   useEffect(() => {
     if (leafletLoading.current) return;
     leafletLoading.current = true;
-    //@ts-ignore
-    Promise.all([import("leaflet"), import("leaflet/dist/leaflet.css")]).then(
-      ([L]) => {
-        leafletRef.current = L;
-        setScriptLoaded(true);
-      }
-    );
+
+    // Load Leaflet once and keep the CSS import static so the host always receives it.
+    import("leaflet").then((L) => {
+      leafletRef.current = L;
+      setScriptLoaded(true);
+    });
   }, []);
 
   const updateBounds = useCallback(() => {
@@ -104,34 +140,71 @@ const MapView: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (!mapContainerRef.current) return;
+
+    // Keep wheel and drag gestures inside the map instead of letting the host page steal them.
+    return stopHostGestureCapture(mapContainerRef.current);
+  }, []);
+
+  useEffect(() => {
     const L = leafletRef.current;
-    if (!scriptLoaded || !mapContainerRef.current || isPending || !L) return;
+    if (!scriptLoaded || !mapContainerRef.current || isPending || !L || mapInstanceRef.current) return;
+    if (!props.center) return;
 
-    const { center, zoom } = props;
+    const center = props.center;
+    const zoom = props.zoom ?? 12;
+    const map = L.map(mapContainerRef.current, {
+      center: [center.lat, center.lng],
+      zoom,
+      zoomControl: true,
+      dragging: true,
+      scrollWheelZoom: true,
+      doubleClickZoom: true,
+      touchZoom: true,
+      keyboard: true,
+    });
 
-    if (!mapInstanceRef.current) {
-      const map = L.map(mapContainerRef.current, {
-        center: [center.lat, center.lng],
-        zoom,
-        zoomControl: true,
-      });
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(map);
 
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-        maxZoom: 19,
-      }).addTo(map);
+    markersLayerRef.current = L.layerGroup().addTo(map);
+    mapInstanceRef.current = map;
+    appliedViewRef.current = buildViewKey(center, zoom);
 
-      markersLayerRef.current = L.layerGroup().addTo(map);
-      mapInstanceRef.current = map;
-
-      map.on("moveend", updateBounds);
-      map.on("zoomend", updateBounds);
+    map.on("moveend", updateBounds);
+    map.on("zoomend", updateBounds);
+    map.whenReady(() => {
+      map.invalidateSize();
       updateBounds();
-    } else {
-      mapInstanceRef.current.setView([center.lat, center.lng], zoom);
-    }
-  }, [scriptLoaded, isPending, props?.center, props?.zoom, updateBounds]);
+    });
+
+    return () => {
+      map.off("moveend", updateBounds);
+      map.off("zoomend", updateBounds);
+      map.remove();
+      mapInstanceRef.current = null;
+      markersLayerRef.current = null;
+      appliedViewRef.current = "";
+    };
+  }, [scriptLoaded, isPending, updateBounds]);
+
+  useEffect(() => {
+    if (!mapInstanceRef.current || isPending) return;
+    if (!props.center) return;
+
+    const center = props.center;
+    const zoom = props.zoom ?? 12;
+    const nextViewKey = buildViewKey(center, zoom);
+
+    // Only recenter when the tool sends a different viewport.
+    if (appliedViewRef.current === nextViewKey) return;
+
+    mapInstanceRef.current.setView([center.lat, center.lng], zoom);
+    appliedViewRef.current = nextViewKey;
+  }, [isPending, props.center?.lat, props.center?.lng, props.zoom]);
 
   useEffect(() => {
     const L = leafletRef.current;
@@ -172,7 +245,22 @@ const MapView: React.FC = () => {
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     mapInstanceRef.current.invalidateSize();
-  }, [displayMode]);
+  }, [displayMode, selectedMarker]);
+
+  useEffect(() => {
+    if (!mapContainerRef.current || !mapInstanceRef.current) return;
+
+    // The host can resize the widget after mount, so keep Leaflet in sync with the container box.
+    const observer = new ResizeObserver(() => {
+      mapInstanceRef.current?.invalidateSize();
+    });
+
+    observer.observe(mapContainerRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [scriptLoaded]);
 
   const handleDirections = useCallback(
     (marker: Marker) => {
@@ -254,7 +342,9 @@ const MapView: React.FC = () => {
 
         {/* Map + side panel layout */}
         <div className="flex" style={{ height: mapHeight }}>
-          <div ref={mapContainerRef} className="flex-1 relative z-0" />
+          <div className="map-shell flex-1 min-w-0">
+            <div ref={mapContainerRef} className="map-canvas relative z-0" />
+          </div>
 
           {/* Side panel — place details */}
           {selectedMarker && (

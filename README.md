@@ -51,7 +51,7 @@ Or open the [Inspector](https://inspector.manufact.com/inspector?autoConnect=htt
 | Tool | Description |
 |------|-------------|
 | `show-map` | Display a safety map with incidents, route points, and one destination |
-| `show-emergency-briefing` | Display a simulated move-prep briefing with latest updates, weather, packing advice, and departure guidance for a position |
+| `show-emergency-briefing` | Display a family-aware move-prep briefing with latest reports, weather, packing advice, departure guidance, and support points for a position |
 | `get-place-details` | Look up place details by name |
 | `add-markers` | Add more markers to an existing map |
 
@@ -62,8 +62,8 @@ Ask the model something like:
 ```text
 I have decided to leave my current area during an emergency.
 Use show-emergency-briefing for my position 32.0853, 34.7818 and destination "North shelter".
-Give me what to pack, weather conditions, and a short before-you-leave checklist.
-Use mock data.
+The adults are Samuele and Anna. The children are Alice and Leonardo.
+Give me a realistic family move-prep briefing with what to pack, weather conditions, and a short before-you-leave checklist.
 ```
 
 ## Available Widgets

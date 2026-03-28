@@ -40,6 +40,11 @@ const nearbyPointSchema = z.object({
   status: z.string().describe("Current mock status"),
 });
 
+const householdSchema = z.object({
+  adults: z.array(z.string()).describe("Adults traveling together"),
+  children: z.array(z.string()).describe("Children traveling together"),
+});
+
 export const emergencyBriefingPropSchema = z.object({
   title: z.string().describe("Widget title"),
   areaName: z.string().describe("Mock area name"),
@@ -48,9 +53,13 @@ export const emergencyBriefingPropSchema = z.object({
     .string()
     .optional()
     .describe("Optional destination or safer location label"),
+  household: householdSchema
+    .optional()
+    .describe("Optional family or travel party information"),
   generatedAtLabel: z.string().describe("Mock generation timestamp"),
-  simulated: z.literal(true).describe("Always true because the data is mocked"),
-  disclaimer: z.string().describe("Mock data disclaimer"),
+  planningNote: z
+    .string()
+    .describe("Short note reminding the user to confirm conditions locally"),
   riskLevel: riskLevelSchema.describe("Overall risk level"),
   alertBanner: z.string().describe("Short emergency banner"),
   summary: z.string().describe("High-level briefing summary"),
@@ -60,6 +69,12 @@ export const emergencyBriefingPropSchema = z.object({
   latestNews: z.array(latestNewsItemSchema).describe("Mock latest updates"),
   weather: weatherSchema.describe("Mock weather conditions"),
   whatToPack: z.array(packItemSchema).describe("Suggested items to pack"),
+  familyConsiderations: z
+    .array(z.string())
+    .describe("Family-specific practical notes"),
+  packAssignments: z
+    .array(z.string())
+    .describe("Suggested carry roles for the named travelers"),
   movementAdvice: z.array(z.string()).describe("Movement guidance"),
   survivalNotes: z.array(z.string()).describe("Short survival reminders"),
   communicationPlan: z.array(z.string()).describe("Communication guidance"),
@@ -67,6 +82,7 @@ export const emergencyBriefingPropSchema = z.object({
 });
 
 export type Coordinates = z.infer<typeof coordinatesSchema>;
+export type Household = z.infer<typeof householdSchema>;
 export type EmergencyBriefingProps = z.infer<typeof emergencyBriefingPropSchema>;
 export type EmergencyRiskLevel = z.infer<typeof riskLevelSchema>;
 export type EmergencyNewsSeverity = z.infer<typeof severitySchema>;
@@ -230,6 +246,7 @@ export function buildMockEmergencyBriefing(
   options?: {
     title?: string;
     destinationLabel?: string;
+    household?: Household;
   }
 ): EmergencyBriefingProps {
   const normalizedPosition = {
@@ -242,8 +259,10 @@ export function buildMockEmergencyBriefing(
   const riskLevel = buildRiskLevel(random);
   const weather = buildWeather(normalizedPosition, random);
   const latestNews = buildLatestNews(random);
-  const whatToPack = buildPackList(weather, riskLevel);
-  const departureChecklist = buildDepartureChecklist(riskLevel);
+  const whatToPack = buildPackList(weather, riskLevel, options?.household);
+  const departureChecklist = buildDepartureChecklist(riskLevel, options?.household);
+  const familyConsiderations = buildFamilyConsiderations(options?.household);
+  const packAssignments = buildPackAssignments(options?.household);
   const movementAdvice = buildMovementAdvice(weather, riskLevel);
   const survivalNotes = buildSurvivalNotes(weather, riskLevel);
   const communicationPlan = buildCommunicationPlan(riskLevel);
@@ -254,17 +273,19 @@ export function buildMockEmergencyBriefing(
     areaName,
     position: normalizedPosition,
     destinationLabel: options?.destinationLabel,
+    household: normalizeHousehold(options?.household),
     generatedAtLabel: buildGeneratedAtLabel(random),
-    simulated: true,
-    disclaimer:
-      "Simulated briefing only. This widget uses mock data and must not guide real-world safety decisions.",
+    planningNote:
+      "Planning aid only. Confirm current conditions, route access, and official alerts with trusted local sources before moving.",
     riskLevel,
     alertBanner: buildAlertBanner(riskLevel),
-    summary: buildSummary(riskLevel, weather, options?.destinationLabel),
+    summary: buildSummary(riskLevel, weather, options?.destinationLabel, options?.household),
     departureChecklist,
     latestNews,
     weather,
     whatToPack,
+    familyConsiderations,
+    packAssignments,
     movementAdvice,
     survivalNotes,
     communicationPlan,
@@ -345,7 +366,8 @@ function buildLatestNews(random: SeededRandom) {
 
 function buildPackList(
   weather: EmergencyBriefingProps["weather"],
-  riskLevel: EmergencyRiskLevel
+  riskLevel: EmergencyRiskLevel,
+  household?: Household
 ) {
   const packList: EmergencyBriefingProps["whatToPack"] = [...MUST_PACK_ITEMS];
 
@@ -377,6 +399,15 @@ function buildPackList(
     packList.push({
       name: "Flashlight, whistle, and small cash reserve",
       reason: "Simple tools matter when lighting, comms, and payment systems become unreliable.",
+      priority: "must",
+    });
+  }
+
+  if (household?.children.length) {
+    packList.push({
+      name: "Children's quick-access pouch",
+      reason:
+        "Keep snacks, wipes, child medication, one spare layer, and a comfort item reachable without unpacking the main bag.",
       priority: "must",
     });
   }
@@ -418,7 +449,10 @@ function buildMovementAdvice(
   return advice;
 }
 
-function buildDepartureChecklist(riskLevel: EmergencyRiskLevel): string[] {
+function buildDepartureChecklist(
+  riskLevel: EmergencyRiskLevel,
+  household?: Household
+): string[] {
   const checklist = [
     "Put identification, medication, cash, charger, and water in the most accessible pocket.",
     "Send one short message with your planned destination, next check-in time, and battery level.",
@@ -435,7 +469,70 @@ function buildDepartureChecklist(riskLevel: EmergencyRiskLevel): string[] {
     );
   }
 
+  if (household?.children.length) {
+    checklist.push(
+      `${joinNames(household.children)} should already be wearing shoes, outer layers, and labeled items before the final bag check.`
+    );
+  }
+
   return checklist;
+}
+
+function buildFamilyConsiderations(household?: Household): string[] {
+  if (!household) {
+    return [];
+  }
+
+  const notes: string[] = [];
+
+  if (household.children.length) {
+    notes.push(
+      `${joinNames(household.children)} should each have one comfort item, one snack, and one visible layer they can keep on without help.`
+    );
+    notes.push(
+      `Review one separation rule with ${joinNames(household.children)}: stop moving, stay visible, and answer only to ${joinNames(household.adults)}.`
+    );
+  }
+
+  if (household.adults.length >= 2) {
+    notes.push(
+      `${household.adults[0]} should handle documents, medication, and check-ins while ${household.adults[1]} keeps water, charging gear, and spare child layers ready.`
+    );
+  } else if (household.adults.length === 1) {
+    notes.push(
+      `${household.adults[0]} should keep documents, phone power, and the child kit in the same top-access section of the bag.`
+    );
+  }
+
+  return notes;
+}
+
+function buildPackAssignments(household?: Household): string[] {
+  if (!household) {
+    return [];
+  }
+
+  const assignments: string[] = [];
+
+  if (household.adults.length >= 1) {
+    assignments.push(
+      `${household.adults[0]}: document pouch, medication, emergency contacts, and primary phone.`
+    );
+  }
+
+  if (household.adults.length >= 2) {
+    assignments.push(
+      `${household.adults[1]}: water, power bank, flashlight, wipes, and spare clothing for the children.`
+    );
+  }
+
+  if (household.children.length) {
+    assignments.push(
+      `${joinNames(household.children)}: each keeps a labeled mini-pouch with snack, water, and one comfort item.`
+    );
+  }
+
+  return assignments;
 }
 
 function buildSurvivalNotes(
@@ -509,8 +606,13 @@ function buildAlertBanner(riskLevel: EmergencyRiskLevel): string {
 function buildSummary(
   riskLevel: EmergencyRiskLevel,
   weather: EmergencyBriefingProps["weather"],
-  destinationLabel?: string
+  destinationLabel?: string,
+  household?: Household
 ): string {
+  const familyText =
+    household?.children.length
+      ? `The move plan should stay simple enough for ${joinNames(household.children)} to follow without extra instructions on the road.`
+      : "The move plan should stay simple enough to carry out without mid-route reorganization.";
   const riskText =
     riskLevel === "Extreme"
       ? "The area is under severe pressure."
@@ -531,7 +633,34 @@ function buildSummary(
     ? `The current plan is to move toward ${destinationLabel}.`
     : "The current plan is to move away from the area toward a safer location.";
 
-  return `${destinationText} ${riskText} ${weatherText} Prioritize a light bag, one fallback route, and short communication bursts.`;
+  return `${destinationText} ${riskText} ${weatherText} ${familyText} Prioritize a light bag, one fallback route, and short communication bursts.`;
+}
+
+function normalizeHousehold(household?: Household): Household | undefined {
+  if (!household) {
+    return undefined;
+  }
+
+  return {
+    adults: household.adults.filter(Boolean),
+    children: household.children.filter(Boolean),
+  };
+}
+
+function joinNames(names: string[]): string {
+  if (!names.length) {
+    return "the group";
+  }
+
+  if (names.length === 1) {
+    return names[0];
+  }
+
+  if (names.length === 2) {
+    return `${names[0]} and ${names[1]}`;
+  }
+
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
 }
 
 function createSeededRandom(position: Coordinates): SeededRandom {

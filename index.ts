@@ -730,13 +730,20 @@ server.tool(
     name: "show-emergency-briefing",
     description:
       "Use this when someone has decided to leave their current area during an emergency and needs a move-prep briefing. " +
-      "Returns simulated local updates, weather conditions, what to pack, departure checklist, movement guidance, and nearby support points.",
+      "It is especially useful for family-aware packing guidance, departure checklists, movement advice, and nearby support points based on the current position.",
     schema: z.object({
       position: coordinatesSchema.describe("Your current position"),
       destinationLabel: z
         .string()
         .optional()
         .describe("Optional destination or safer location label"),
+      household: z
+        .object({
+          adults: z.array(z.string()).default([]).describe("Adults traveling together"),
+          children: z.array(z.string()).default([]).describe("Children traveling together"),
+        })
+        .optional()
+        .describe("Optional family or travel party information"),
       title: z.string().optional().describe("Optional widget title"),
     }),
     widget: {
@@ -745,16 +752,17 @@ server.tool(
       invoked: "Briefing ready",
     },
   },
-  async ({ position, destinationLabel, title }) => {
+  async ({ position, destinationLabel, household, title }) => {
     const briefing = buildMockEmergencyBriefing(position, {
       title,
       destinationLabel,
+      household,
     });
 
     return widget({
       props: briefing,
       output: text(
-        `Simulated move-prep briefing for ${briefing.areaName}. ` +
+        `Move-prep briefing for ${briefing.areaName}. ` +
           `${briefing.whatToPack.length} packing items, weather ${briefing.weather.condition.toLowerCase()}, ` +
           `risk level ${briefing.riskLevel.toLowerCase()}.`
       ),
