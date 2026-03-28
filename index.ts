@@ -1,5 +1,9 @@
 import { MCPServer, object, text, widget } from "mcp-use/server";
 import { z } from "zod";
+import {
+  buildMockEmergencyBriefing,
+  coordinatesSchema,
+} from "./src/emergency-briefing";
 
 const markerSchema = z.object({
   lat: z.number().describe("Latitude"),
@@ -11,41 +15,120 @@ const markerSchema = z.object({
 
 type Coordinates = { lat: number; lng: number };
 type Marker = z.infer<typeof markerSchema>;
+type RouteGuide = {
+  title: string;
+  summary: string;
+  eta: string;
+  steps: string[];
+  disclaimer: string;
+};
 type MapState = {
   center: Coordinates;
   zoom: number;
   markers: Marker[];
   title: string;
+  guide: RouteGuide;
 };
 
-const DEFAULT_MAP_TITLE = "Recent events near you";
+const DEFAULT_MAP_TITLE = "Safety route and incident map";
+const ROUTE_POINT_COUNT = 6;
+const START_MARKER_TITLE = "Point A";
+const DESTINATION_MARKER_TITLE = "Point B";
+const DESTINATION_CODE_NAME = "Gateway X";
+const CHECKPOINT_LABEL = "Checkpoint";
 
-const RECENT_EVENT_TEMPLATES: Array<Omit<Marker, "lat" | "lng">> = [
+const EMPTY_ROUTE_GUIDE: RouteGuide = {
+  title: "Point A to Point B",
+  summary: "Run show-map to generate a simulated route guide.",
+  eta: "Simulated ETA unavailable",
+  steps: ["Generate a map to create a mock route between Point A and Point B."],
+  disclaimer:
+    "Simulated route only. Mock data must not guide real-world movement decisions.",
+};
+
+const DANGER_EVENT_TEMPLATES = [
   {
-    title: "Indirect fire reported",
-    description: "Recent incident bookmark. Rocket or artillery activity reported in this sector.",
-    color: "red",
+    label: "Missile strike",
+    detail: "Heavy impact. Damage and casualties reported in this sector.",
+    color: "red" as const,
   },
   {
-    title: "Civilian evacuation corridor",
-    description: "Recent incident bookmark. Organized movement of non-combatants along this route.",
-    color: "orange",
+    label: "Drone attack",
+    detail: "Low-altitude strike reported here. Avoid this approach.",
+    color: "orange" as const,
   },
   {
-    title: "Checkpoint / access control",
-    description: "Recent incident bookmark. Armed checkpoint or movement restriction observed here.",
-    color: "blue",
+    label: "Fire and destruction",
+    detail: "Large fire with structural damage visible from this point.",
+    color: "red" as const,
   },
   {
-    title: "Field medical / triage",
-    description: "Recent incident bookmark. Ad-hoc casualty collection or stabilization point.",
-    color: "green",
+    label: "Casualty report",
+    detail: "Emergency activity and casualties reported in the immediate area.",
+    color: "orange" as const,
   },
   {
-    title: "Critical infrastructure damage",
-    description: "Recent incident bookmark. Power, water, transport, or communications impact reported.",
-    color: "purple",
+    label: "Secondary blast",
+    detail: "A follow-up explosion was reported after the first strike.",
+    color: "red" as const,
   },
+  {
+    label: "Building collapse",
+    detail: "Destroyed structures and blocked movement reported here.",
+    color: "orange" as const,
+  },
+  {
+    label: "Burning vehicles",
+    detail: "Vehicles are burning here. Expect smoke and heat damage.",
+    color: "red" as const,
+  },
+  {
+    label: "Strike damage",
+    detail: "Widespread damage reported after repeated impacts.",
+    color: "orange" as const,
+  },
+  {
+    label: "Missile debris",
+    detail: "Hazardous debris field and damage spreading across this block.",
+    color: "red" as const,
+  },
+  {
+    label: "Drone impact",
+    detail: "Fresh drone impact. Damage assessment is still underway.",
+    color: "orange" as const,
+  },
+  {
+    label: "Heavy smoke",
+    detail: "Dense smoke and active fire make this area unsafe.",
+    color: "red" as const,
+  },
+  {
+    label: "Casualty cluster",
+    detail: "Multiple casualty alerts have been reported here.",
+    color: "orange" as const,
+  },
+];
+
+const DANGER_EVENT_LAYOUTS: Coordinates[] = [
+  { lat: -1.7, lng: -1.1 },
+  { lat: -1.4, lng: 0.8 },
+  { lat: -1.1, lng: 1.5 },
+  { lat: -0.6, lng: -1.6 },
+  { lat: -0.2, lng: 1.7 },
+  { lat: 0.2, lng: -1.5 },
+  { lat: 0.6, lng: 1.4 },
+  { lat: 1.0, lng: -1.2 },
+  { lat: 1.3, lng: 0.4 },
+  { lat: 1.5, lng: 1.3 },
+  { lat: 1.8, lng: -0.5 },
+  { lat: 0.9, lng: 1.9 },
+];
+
+const DESTINATION_VARIANTS: Coordinates[] = [
+  { lat: -1.4, lng: 1.8 },
+  { lat: 1.4, lng: 1.7 },
+  { lat: -1.5, lng: -1.8 },
+  { lat: 1.5, lng: -1.7 },
 ];
 
 const server = new MCPServer({
@@ -62,9 +145,10 @@ const server = new MCPServer({
 
 let lastMapState: MapState = {
   center: { lat: 0, lng: 0 },
-  zoom: 5,
+  zoom: 12,
   markers: [],
   title: DEFAULT_MAP_TITLE,
+  guide: EMPTY_ROUTE_GUIDE,
 };
 
 const placeDatabase: Record<
@@ -171,20 +255,77 @@ function buildPositionMarker(center: Coordinates): Marker {
   return {
     lat: center.lat,
     lng: center.lng,
-    title: "Your position",
-    description: "The current focus of the map.",
+    title: START_MARKER_TITLE,
+    description: "Blue dot. Current position and start of the simulated route.",
     color: "blue",
   };
 }
 
-function buildRecentEventBookmarks(center: Coordinates, zoom: number): Marker[] {
+function buildSafeDestination(center: Coordinates, zoom: number): Coordinates {
   const spread = getBookmarkSpread(zoom);
+  const variant = DESTINATION_VARIANTS[randomIndex(DESTINATION_VARIANTS.length)];
 
-  return RECENT_EVENT_TEMPLATES.map((template) => ({
-    ...template,
-    lat: clampLatitude(center.lat + randomOffset(spread.lat)),
-    lng: normalizeLongitude(center.lng + randomOffset(spread.lng)),
-  }));
+  return {
+    lat: clampLatitude(center.lat + variant.lat * spread.lat + randomOffset(spread.lat * 0.15)),
+    lng: normalizeLongitude(center.lng + variant.lng * spread.lng + randomOffset(spread.lng * 0.15)),
+  };
+}
+
+function buildSafeDestinationMarker(destination: Coordinates): Marker {
+  return {
+    lat: destination.lat,
+    lng: destination.lng,
+    title: DESTINATION_MARKER_TITLE,
+    description: "Purple point. Gateway X and end of the simulated route.",
+    color: "purple",
+  };
+}
+
+function buildSuggestedPathMarkers(center: Coordinates, destination: Coordinates): Marker[] {
+  const latDistance = destination.lat - center.lat;
+  const lngDistance = destination.lng - center.lng;
+  const latCurve = -lngDistance * 0.08;
+  const lngCurve = latDistance * 0.08;
+  const markers: Marker[] = [];
+
+  // Space green markers evenly so the route reads like one continuous path.
+  for (let index = 0; index < ROUTE_POINT_COUNT; index += 1) {
+    const progress = (index + 1) / (ROUTE_POINT_COUNT + 1);
+    const curveStrength = progress <= 0.5 ? progress : 1 - progress;
+
+    markers.push({
+      lat: clampLatitude(center.lat + latDistance * progress + latCurve * curveStrength),
+      lng: normalizeLongitude(center.lng + lngDistance * progress + lngCurve * curveStrength),
+      title: `${CHECKPOINT_LABEL} ${index + 1}`,
+      description:
+        index === ROUTE_POINT_COUNT - 1
+          ? `Final green checkpoint before ${DESTINATION_MARKER_TITLE}.`
+          : `Stay on the green corridor toward ${DESTINATION_MARKER_TITLE}.`,
+      color: "green",
+    });
+  }
+
+  return markers;
+}
+
+function buildDangerEventMarkers(center: Coordinates, zoom: number): Marker[] {
+  const spread = getDangerSpread(zoom);
+
+  return DANGER_EVENT_TEMPLATES.map((template, index) => {
+    const layout = DANGER_EVENT_LAYOUTS[index];
+    const jitter = {
+      lat: randomOffset(spread.lat * 0.12),
+      lng: randomOffset(spread.lng * 0.12),
+    };
+
+    return {
+      lat: clampLatitude(center.lat + layout.lat * spread.lat + jitter.lat),
+      lng: normalizeLongitude(center.lng + layout.lng * spread.lng + jitter.lng),
+      title: `${template.label} ${index + 1}`,
+      description: template.detail,
+      color: template.color,
+    };
+  });
 }
 
 function getBookmarkSpread(zoom: number): Coordinates {
@@ -203,12 +344,25 @@ function getBookmarkSpread(zoom: number): Coordinates {
   return { lat: 0.35, lng: 0.5 };
 }
 
+function getDangerSpread(zoom: number): Coordinates {
+  const spread = getBookmarkSpread(zoom);
+
+  return {
+    lat: spread.lat * 1.1,
+    lng: spread.lng * 1.1,
+  };
+}
+
 function randomOffset(maxDistance: number): number {
   const minDistance = maxDistance * 0.25;
   const distance = minDistance + Math.random() * (maxDistance - minDistance);
   const direction = Math.random() >= 0.5 ? 1 : -1;
 
   return roundCoordinate(distance * direction);
+}
+
+function randomIndex(length: number): number {
+  return Math.floor(Math.random() * length);
 }
 
 function clampLatitude(value: number): number {
@@ -231,11 +385,161 @@ function roundCoordinate(value: number): number {
   return Number(value.toFixed(6));
 }
 
-function buildBookmarksMap(center: Coordinates, zoom: number): Marker[] {
+function buildMapState(center: Coordinates, zoom: number, title: string): MapState {
+  const destination = buildSafeDestination(center, zoom);
+  const dangerMarkers = buildDangerEventMarkers(center, zoom);
+  const routeMarkers = buildSuggestedPathMarkers(center, destination);
+  const safeDestinationMarker = buildSafeDestinationMarker(destination);
   const positionMarker = buildPositionMarker(center);
-  const recentEventBookmarks = buildRecentEventBookmarks(center, zoom);
+  const guide = buildRouteGuide(center, destination, routeMarkers, dangerMarkers, zoom);
 
-  return [positionMarker, ...recentEventBookmarks];
+  // Keep danger markers below the route markers so the escape path stays visible.
+  return {
+    center,
+    zoom,
+    title,
+    guide,
+    markers: [...dangerMarkers, ...routeMarkers, safeDestinationMarker, positionMarker],
+  };
+}
+
+// Build a short in-world route explanation that feels like a briefing, not turn-by-turn GPS.
+function buildRouteGuide(
+  center: Coordinates,
+  destination: Coordinates,
+  routeMarkers: Marker[],
+  dangerMarkers: Marker[],
+  zoom: number
+): RouteGuide {
+  const routeDirection = getDirectionLabel(center, destination);
+  const corridorName = getCorridorName(routeDirection);
+  const incidentCluster = getIncidentClusterLabel(center, dangerMarkers);
+  const firstCheckpoint = routeMarkers[0]?.title ?? `${CHECKPOINT_LABEL} 1`;
+  const middleCheckpoint =
+    routeMarkers[Math.floor(routeMarkers.length / 2)]?.title ?? `${CHECKPOINT_LABEL} 4`;
+  const finalCheckpoint =
+    routeMarkers[routeMarkers.length - 1]?.title ?? `${CHECKPOINT_LABEL} ${ROUTE_POINT_COUNT}`;
+  const finalApproach = getFinalApproachLabel(routeMarkers[routeMarkers.length - 1], destination);
+  const eta = getSimulatedEtaLabel(zoom);
+
+  return {
+    title: "Point A to Point B",
+    summary:
+      `Move ${routeDirection} through the ${corridorName}, hold the green checkpoint chain, ` +
+      `and finish at ${DESTINATION_MARKER_TITLE} (${DESTINATION_CODE_NAME}).`,
+    eta,
+    steps: [
+      `Leave ${START_MARKER_TITLE} and settle into the ${corridorName}. The route trends ${routeDirection} from your starting position.`,
+      `Use ${firstCheckpoint} and ${middleCheckpoint} to stay on line. Keep the ${incidentCluster} outside your direct path.`,
+      `After ${finalCheckpoint}, take the ${finalApproach} final approach into ${DESTINATION_MARKER_TITLE} at ${DESTINATION_CODE_NAME}.`,
+    ],
+    disclaimer:
+      "Simulated route only. Corridor names, checkpoints, and incident clusters are fictional and must not guide real-world movement decisions.",
+  };
+}
+
+function getDirectionLabel(from: Coordinates, to: Coordinates): string {
+  const latDistance = to.lat - from.lat;
+  const lngDistance = to.lng - from.lng;
+  const vertical = Math.abs(latDistance) < 0.002 ? "" : latDistance > 0 ? "north" : "south";
+  const horizontal = Math.abs(lngDistance) < 0.002 ? "" : lngDistance > 0 ? "east" : "west";
+
+  if (vertical && horizontal) {
+    return `${vertical}-${horizontal}`;
+  }
+
+  if (vertical) {
+    return vertical;
+  }
+
+  if (horizontal) {
+    return horizontal;
+  }
+
+  return "forward";
+}
+
+function getCorridorName(direction: string): string {
+  const corridorNames: Record<string, string> = {
+    north: "north service corridor",
+    "north-east": "north-east tram corridor",
+    east: "east market lane",
+    "south-east": "south-east canal walk",
+    south: "south service corridor",
+    "south-west": "south-west depot lane",
+    west: "west market lane",
+    "north-west": "north-west service cut-through",
+    forward: "central corridor",
+  };
+
+  return corridorNames[direction] ?? "central corridor";
+}
+
+function getIncidentClusterLabel(center: Coordinates, dangerMarkers: Marker[]): string {
+  if (dangerMarkers.length === 0) {
+    return "nearest incident sector";
+  }
+
+  const totals = dangerMarkers.reduce(
+    (accumulator, marker) => ({
+      lat: accumulator.lat + marker.lat,
+      lng: accumulator.lng + marker.lng,
+    }),
+    { lat: 0, lng: 0 }
+  );
+
+  const averagePosition = {
+    lat: totals.lat / dangerMarkers.length,
+    lng: totals.lng / dangerMarkers.length,
+  };
+
+  const direction = getDirectionLabel(center, averagePosition);
+
+  if (direction === "forward") {
+    return "central incident cluster";
+  }
+
+  return `${direction} incident cluster`;
+}
+
+function getFinalApproachLabel(lastCheckpoint: Marker | undefined, destination: Coordinates): string {
+  if (!lastCheckpoint) {
+    return "direct";
+  }
+
+  const direction = getDirectionLabel(
+    { lat: lastCheckpoint.lat, lng: lastCheckpoint.lng },
+    destination
+  );
+
+  if (direction === "forward") {
+    return "direct";
+  }
+
+  return direction;
+}
+
+function getSimulatedEtaLabel(zoom: number): string {
+  if (zoom >= 14) {
+    return "Simulated ETA 4 to 6 minutes on foot";
+  }
+
+  if (zoom >= 11) {
+    return "Simulated ETA 8 to 11 minutes on foot";
+  }
+
+  if (zoom >= 8) {
+    return "Simulated ETA 14 to 18 minutes on foot";
+  }
+
+  return "Simulated ETA 24 to 30 minutes on foot";
+}
+
+function buildRouteGuideOutput(guide: RouteGuide): string {
+  return (
+    `Simulated route guide from ${START_MARKER_TITLE} to ${DESTINATION_MARKER_TITLE}: ` +
+    `${guide.summary} ${guide.eta}.`
+  );
 }
 
 function findMarkerByName(name: string): Marker | undefined {
@@ -247,16 +551,56 @@ function findMarkerByName(name: string): Marker | undefined {
 }
 
 function buildGeneratedMarkerDetails(marker: Marker) {
-  const isPositionMarker = marker.title === "Your position";
+  if (marker.title === START_MARKER_TITLE) {
+    return {
+      name: marker.title,
+      population: "Not applicable",
+      timezone: "Follows the timezone of the current map area",
+      country: "Current position",
+      funFacts: [
+        marker.description ?? "Blue dot marking your current position.",
+        `This is the start of the simulated route toward ${DESTINATION_MARKER_TITLE}.`,
+      ],
+      coordinates: { lat: marker.lat, lng: marker.lng },
+    };
+  }
+
+  if (marker.title === DESTINATION_MARKER_TITLE) {
+    return {
+      name: marker.title,
+      population: "Not applicable",
+      timezone: "Follows the timezone of the current map area",
+      country: "Safe destination",
+      funFacts: [
+        marker.description ?? "Purple point marking the suggested safest position.",
+        `${DESTINATION_CODE_NAME} is the end point of the simulated route.`,
+      ],
+      coordinates: { lat: marker.lat, lng: marker.lng },
+    };
+  }
+
+  if (marker.title.startsWith(CHECKPOINT_LABEL)) {
+    return {
+      name: marker.title,
+      population: "Route marker",
+      timezone: "Follows the timezone of the current map area",
+      country: "Suggested path",
+      funFacts: [
+        marker.description ?? "Green checkpoint on the simulated route.",
+        `Continue through the green checkpoints until you reach ${DESTINATION_MARKER_TITLE}.`,
+      ],
+      coordinates: { lat: marker.lat, lng: marker.lng },
+    };
+  }
 
   return {
     name: marker.title,
-    population: isPositionMarker ? "Not applicable" : "Live bookmark",
+    population: "Incident marker",
     timezone: "Follows the timezone of the current map area",
-    country: isPositionMarker ? "Current position" : "Recent event",
+    country: "Danger event",
     funFacts: [
-      marker.description ?? "Pinned on the current map.",
-      "This point was generated automatically when show-map was called.",
+      marker.description ?? "Red or orange point marking a dangerous event.",
+      "These points represent strikes, fires, destruction, drone attacks, or casualties.",
     ],
     coordinates: { lat: marker.lat, lng: marker.lng },
   };
@@ -266,8 +610,8 @@ server.tool(
   {
     name: "show-map",
     description:
-      "Show an event bookmark map centered on a location. " +
-      "Each call adds your position and a fresh set of recent-event bookmarks automatically.",
+      "Show a safety map centered on a location. " +
+      "Each call adds your position, one safe destination, a suggested green path, and a dense set of danger events automatically.",
     schema: z.object({
       center: z
         .object({ lat: z.number(), lng: z.number() })
@@ -288,16 +632,12 @@ server.tool(
   },
   async ({ center, zoom, title }) => {
     const resolvedTitle = title ?? DEFAULT_MAP_TITLE;
-    const markers = buildBookmarksMap(center, zoom);
-
-    lastMapState = { center, zoom, markers, title: resolvedTitle };
+    lastMapState = buildMapState(center, zoom, resolvedTitle);
 
     return widget({
-      props: { center, zoom, markers, title: resolvedTitle },
+      props: lastMapState,
       output: text(
-        `Map centered at ${center.lat.toFixed(4)}, ${center.lng.toFixed(4)} ` +
-          `(zoom ${zoom}) with 1 position marker and ${markers.length - 1} recent-event bookmark${markers.length - 1 !== 1 ? "s" : ""}` +
-          `: ${resolvedTitle}`
+        buildRouteGuideOutput(lastMapState.guide)
       ),
     });
   }
@@ -375,10 +715,48 @@ server.tool(
         zoom: lastMapState.zoom,
         markers: lastMapState.markers,
         title: lastMapState.title,
+        guide: lastMapState.guide,
       },
       output: text(
         `Added ${newMarkers.length} marker${newMarkers.length !== 1 ? "s" : ""}. ` +
           `Map now has ${lastMapState.markers.length} total markers.`
+      ),
+    });
+  }
+);
+
+server.tool(
+  {
+    name: "show-emergency-briefing",
+    description:
+      "Use this when someone has decided to leave their current area during an emergency and needs a move-prep briefing. " +
+      "Returns simulated local updates, weather conditions, what to pack, departure checklist, movement guidance, and nearby support points.",
+    schema: z.object({
+      position: coordinatesSchema.describe("Your current position"),
+      destinationLabel: z
+        .string()
+        .optional()
+        .describe("Optional destination or safer location label"),
+      title: z.string().optional().describe("Optional widget title"),
+    }),
+    widget: {
+      name: "emergency-briefing",
+      invoking: "Preparing briefing...",
+      invoked: "Briefing ready",
+    },
+  },
+  async ({ position, destinationLabel, title }) => {
+    const briefing = buildMockEmergencyBriefing(position, {
+      title,
+      destinationLabel,
+    });
+
+    return widget({
+      props: briefing,
+      output: text(
+        `Simulated move-prep briefing for ${briefing.areaName}. ` +
+          `${briefing.whatToPack.length} packing items, weather ${briefing.weather.condition.toLowerCase()}, ` +
+          `risk level ${briefing.riskLevel.toLowerCase()}.`
       ),
     });
   }

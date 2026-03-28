@@ -7,10 +7,10 @@ import {
 } from "mcp-use/react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import "../styles.css";
-import { propSchema, type MapViewProps, type Marker } from "./types";
+import { propSchema, type MapViewProps, type Marker, type RouteGuide } from "./types";
 
 export const widgetMetadata: WidgetMetadata = {
-  description: "Interactive Leaflet event map with bookmarks, popups, and place details",
+  description: "Interactive Leaflet safety map with incidents, route markers, and place details",
   props: propSchema,
   exposeAsTool: false,
   metadata: {
@@ -43,6 +43,19 @@ type PlaceDetails = {
   coordinates: { lat: number; lng: number };
 };
 
+const FALLBACK_ROUTE_GUIDE: RouteGuide = {
+  title: "Point A to Point B",
+  summary: "Follow the visible checkpoint chain from the blue start marker to the purple destination marker.",
+  eta: "Simulated ETA unavailable",
+  steps: [
+    "Start at Point A and move toward the first visible green checkpoint.",
+    "Stay on the green checkpoint chain and keep distance from red and orange incident markers.",
+    "Finish at Point B, marked as Gateway X on the map.",
+  ],
+  disclaimer:
+    "Simulated route only. Mock map data must not guide real-world movement decisions.",
+};
+
 const MapView: React.FC = () => {
   const {
     props,
@@ -50,7 +63,6 @@ const MapView: React.FC = () => {
     displayMode,
     requestDisplayMode,
     openExternal,
-    theme,
   } = useWidget<MapViewProps>();
 
   const {
@@ -193,6 +205,7 @@ const MapView: React.FC = () => {
   }
 
   const { title, markers } = props;
+  const guide = props.guide ?? FALLBACK_ROUTE_GUIDE;
 
   return (
     <McpUseProvider autoSize>
@@ -235,6 +248,9 @@ const MapView: React.FC = () => {
             )}
           </div>
         </div>
+
+        {/* Persistent guide card so the route stays visible while the widget is in use. */}
+        <RouteGuideCard guide={guide} />
 
         {/* Map + side panel layout */}
         <div className="flex" style={{ height: mapHeight }}>
@@ -330,5 +346,44 @@ const MapView: React.FC = () => {
     </McpUseProvider>
   );
 };
+
+function RouteGuideCard({ guide }: { guide: RouteGuide }) {
+  return (
+    <div className="px-4 py-3 border-b border-amber-200 bg-amber-50/80 dark:border-amber-900/60 dark:bg-amber-950/30">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] uppercase tracking-[0.18em] text-amber-700 dark:text-amber-400">
+            Simulated route guide
+          </p>
+          <h4 className="text-sm font-semibold text-amber-950 dark:text-amber-100 truncate">
+            {guide.title}
+          </h4>
+        </div>
+        <span className="shrink-0 rounded-full bg-white/80 px-2.5 py-1 text-[11px] font-medium text-amber-800 shadow-sm dark:bg-amber-900/60 dark:text-amber-100">
+          {guide.eta}
+        </span>
+      </div>
+
+      <p className="mt-2 text-xs leading-5 text-amber-900 dark:text-amber-100">
+        {guide.summary}
+      </p>
+
+      <ol className="mt-3 space-y-1.5">
+        {guide.steps.map((step, index) => (
+          <li key={step} className="flex gap-2 text-xs leading-5 text-amber-900 dark:text-amber-100">
+            <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-900 text-[10px] font-semibold text-amber-50 dark:bg-amber-200 dark:text-amber-950">
+              {index + 1}
+            </span>
+            <span>{step}</span>
+          </li>
+        ))}
+      </ol>
+
+      <p className="mt-3 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+        {guide.disclaimer}
+      </p>
+    </div>
+  );
+}
 
 export default MapView;

@@ -8,7 +8,7 @@
   </a>
 </p>
 
-Interactive event map MCP App powered by [Leaflet](https://leafletjs.com/). The model centers the map, drops a "your position" marker, and auto-generates recent-event bookmarks around it on every `show-map` call.
+Interactive safety map MCP App powered by [Leaflet](https://leafletjs.com/). The model centers the map, drops a blue current-position dot, adds a dense field of red/orange incident bookmarks, draws a chain of green route points, and ends on one purple safe destination.
 
 ![Maps Explorer Demo](./repo-assets/demo.gif)
 
@@ -36,8 +36,10 @@ Or open the [Inspector](https://inspector.manufact.com/inspector?autoConnect=htt
 
 ## Features
 
-- **Auto-generated event bookmarks** — every `show-map` call creates fresh recent-event pins
-- **Current position marker** — the requested center is always shown as your position
+- **Dense incident field** — every `show-map` call creates many fresh red/orange danger bookmarks
+- **Current position marker** — the requested center is always shown as your blue position dot
+- **Suggested route chain** — green points create a readable path from your position to safety
+- **Single safe destination** — one purple point marks the suggested safest destination
 - **Streaming markers** — pins still appear on the map as the model adds them
 - **Colored pins** — red, blue, green, orange, purple markers
 - **Popup descriptions** — click markers for details
@@ -48,9 +50,21 @@ Or open the [Inspector](https://inspector.manufact.com/inspector?autoConnect=htt
 
 | Tool | Description |
 |------|-------------|
-| `show-map` | Display an event bookmark map centered on a location |
+| `show-map` | Display a safety map with incidents, route points, and one destination |
+| `show-emergency-briefing` | Display a simulated move-prep briefing with latest updates, weather, packing advice, and departure guidance for a position |
 | `get-place-details` | Look up place details by name |
 | `add-markers` | Add more markers to an existing map |
+
+### Demo prompt idea
+
+Ask the model something like:
+
+```text
+I have decided to leave my current area during an emergency.
+Use show-emergency-briefing for my position 32.0853, 34.7818 and destination "North shelter".
+Give me what to pack, weather conditions, and a short before-you-leave checklist.
+Use mock data.
+```
 
 ## Available Widgets
 
